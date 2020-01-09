@@ -13,9 +13,10 @@ struct FilterData final {
 
 	self(a, 0ll);
 	self(s, 0ll);
+	//self(s2, 0ll);
 	self(h, 0.);
 	self(h2, 0.);
-	self(sdev, 0.);
+	//self(sdev, 0.);
 
 
 	self(process, std::array{ false,false,false });
@@ -76,7 +77,11 @@ struct FilterData final {
 
 		s = api->propGetInt(in, "s", 0, &err);
 		if (err)
-			s = 4;
+			s = 8;
+
+		//s2 = api->propGetInt(in, "s2", 0, &err);
+		//if (err)
+			//s2 = s/2;
 
 		h = api->propGetFloat(in, "h", 0, &err);
 		if (err)
@@ -85,14 +90,14 @@ struct FilterData final {
 
 		h2 = api->propGetFloat(in, "h2", 0, &err);
 		if (err)
-			h2 = h * 10.;
+			h2 = h;
 
 		h /= ScalingFactor;
 		h2 /= ScalingFactor;
 
-		sdev = api->propGetFloat(in, "sdev", 0, &err);
-		if (err)
-			sdev = 1.;
+		//sdev = api->propGetFloat(in, "sdev", 0, &err);
+		//if (err)
+			//sdev = 1.;
 
 		if (auto format_status = CheckFormat(); format_status == false)
 			return false;
@@ -132,29 +137,33 @@ auto FilterGetFrame = [](auto n, auto activationReason, auto instanceData, auto 
 
 				auto a = d->a;
 				auto s = d->s;
+				//auto s2 = d->s2;
 
 				auto h = d->h;
 				auto h2 = d->h2;
 
-				auto sdev = d->sdev;
+				//auto sdev = d->sdev;
 
 				auto SearchSize = Square(2 * a + 1);
 				auto PatchSize = Square(2 * s + 1);
+				
 
 				auto PatchMatrix = std::vector<std::vector<double>>{};
 				auto PositionWeights = std::vector<double>{};
 				auto PatchWeights = std::vector<double>{};
-				auto CenterPixels = std::vector<double>{};
-				auto DistanceWeights = std::vector<double>{};
+				auto CenterPatch = std::vector<double>{};
+				//auto DistanceWeights = std::vector<double>{};
 
 				PatchMatrix.resize(SearchSize);
 				for (auto& x : PatchMatrix)
 					x.resize(PatchSize);
 
+				
+
 				PositionWeights.resize(PatchSize);
 				PatchWeights.resize(SearchSize);
-				CenterPixels.resize(SearchSize);
-				DistanceWeights.resize(PatchSize);
+				CenterPatch.resize(PatchSize);
+				//DistanceWeights.resize(PatchSize);
 
 				auto PlaneWidth = vsapi->getFrameWidth(src, plane);
 				auto PlaneHeight = vsapi->getFrameHeight(src, plane);
@@ -169,25 +178,33 @@ auto FilterGetFrame = [](auto n, auto activationReason, auto instanceData, auto 
 
 				auto MakePatchMatrix = [&](auto y, auto x) {
 					auto MatrixCursor = PatchMatrix.begin();
-					auto CenterCursor = CenterPixels.begin();
-					auto FlattenPatch = [&](auto FlattenedVector, auto y, auto x) {
+					
+
+
+					auto FlattenPatch = [&](auto FlattenedVector, auto &Canvas, auto y, auto x) {
 						auto Cursor = FlattenedVector->begin();
+
+
+
 						for (auto yCursor : Range{ y - s, y + s + 1 })
 							for (auto xCursor : Range{ x - s, x + s + 1 }) {
-								*Cursor = refp[yCursor][xCursor];
+								*Cursor = Canvas[yCursor][xCursor];
 								++Cursor;
 							}
 					};
+
+
+					FlattenPatch(&CenterPatch, srcp, y, x);
+
 					for (auto yCursor : Range{ y - a, y + a + 1 })
 						for (auto xCursor : Range{ x - a, x + a + 1 }) {
-							FlattenPatch(MatrixCursor, yCursor, xCursor);
-							*CenterCursor = srcp[yCursor][xCursor];
+							FlattenPatch(MatrixCursor, refp, yCursor, xCursor);
 							++MatrixCursor;
-							++CenterCursor;
+							
 						}
 				};
 
-
+				/*
 				auto CalculateDistanceWeights = [&]() {
 					auto CalculateGaussianWeight = [&](auto y, auto x) {
 						auto Variance = Square(sdev);
@@ -199,29 +216,15 @@ auto FilterGetFrame = [](auto n, auto activationReason, auto instanceData, auto 
 						for (auto x : Range{ 2 * s + 1 })
 							PatchView[y][x] = CalculateGaussianWeight(y, x);
 				};
+				*/
 
-				auto CalculatePositionWeights = [&]() {
-					auto CalculatePositionSSE = [&](auto Position) {
-						auto SSE = 0.;
-						for (auto y : Range{ SearchSize })
-							SSE += Square(PatchMatrix[y][Position] - PatchMatrix[y][(PatchSize - 1) / 2]);
-						return SSE;
-					};
-					auto SSEToWeights = [&]() {
-						for (auto& x : PositionWeights)
-							x = std::exp(-x / Square(h2));
-					};
-					for (auto x : Range{ PatchSize })
-						PositionWeights[x] = CalculatePositionSSE(x);
-					SSEToWeights();
-				};
 
 
 				auto CalculatePatchWeights = [&]() {
 					auto CalculatePatchSSE = [&](auto Patch) {
 						auto SSE = 0.;
 						for (auto x : Range{ PatchSize })
-							SSE += DistanceWeights[x] * PositionWeights[x] * Square(PatchMatrix[Patch][x] - PatchMatrix[(SearchSize - 1) / 2][x]);
+							SSE += Square(PatchMatrix[Patch][x] - PatchMatrix[(SearchSize - 1) / 2][x]);
 						return SSE;
 					};
 					auto SSEToNormalizedWeights = [&]() {
@@ -238,20 +241,49 @@ auto FilterGetFrame = [](auto n, auto activationReason, auto instanceData, auto 
 					SSEToNormalizedWeights();
 				};
 
+
+
+
+				auto CalculatePositionWeights = [&]() {
+					auto CalculatePositionSSE = [&](auto Position) {
+						auto SSE = 0.;
+						for (auto y : Range{ SearchSize })
+							SSE += PatchWeights[y] * Square(PatchMatrix[y][Position] - PatchMatrix[y][(PatchSize - 1) / 2]);
+						return SSE;
+					};
+					auto SSEToWeights = [&]() {
+						auto NormalizingConstant = 0.;
+						for (auto& x : PositionWeights) {
+							x = std::exp(-x / Square(h2));
+							NormalizingConstant += x;
+						}
+						for (auto& x : PositionWeights)
+							x /= NormalizingConstant;
+					};
+					for (auto x : Range{ PatchSize })
+						PositionWeights[x] = CalculatePositionSSE(x);
+					SSEToWeights();
+				};
+
+
+
+
+
+
+
 				auto Aggregate = [&]() {
 					auto Result = 0.;
-					for (auto y : Range{ SearchSize })
-						Result += PatchWeights[y] * CenterPixels[y];
+					for (auto x : Range{ PatchSize })
+						Result += PositionWeights[x] * CenterPatch[x];
 					return Result;
 				};
 
-				CalculateDistanceWeights();
+				//CalculateDistanceWeights();
 				for (auto y : Range{ PlaneHeight })
 					for (auto x : Range{ PlaneWidth }) {
 						MakePatchMatrix(y, x);
-						CalculatePositionWeights();
 						CalculatePatchWeights();
-
+						CalculatePositionWeights();
 						dstp[y][x] = Aggregate();
 					}
 
@@ -287,9 +319,10 @@ VS_EXTERNAL_API(auto) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
 		"ref:clip:opt;"
 		"a:int:opt;"
 		"s:int:opt;"
+		//"s2:int:opt;"
 		"h:float:opt;"
 		"h2:float:opt;"
-		"sdev:float:opt;"
+		//"sdev:float:opt;"
 
 		"planes:int[]:opt;"
 		, FilterCreate, 0, plugin);
